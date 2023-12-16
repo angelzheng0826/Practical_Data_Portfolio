@@ -1,0 +1,559 @@
+---
+title: "Predicitive Model Selection for Tracheostomy or Death in Neonates with Severe Bronchopulmonary Dysplasia (sBPD)"
+author: "Angel Zheng"
+date: "Nov 2023 for PHP2550"
+abstract: "Infants diagnosed with severe bronchopulmonary dysplasia (sBPD) often undergo tracheostomy prior to discharge to facilitate their daily living and maintain vital functions. In this report, we construct a predictive model for the outcomes of tracheostomy or death in infants with sBPD. Two distinct model development methods, namely LASSO and Best Subset, were employed, resulting in four versions of the model with varying variable inclusions. Each method computes two models, with and without interactions. To enhance the robustness of our findings, the model development process incorporated multiple imputation and cross-validation techniques. This involved averaging set of variable coefficients with lowest error across imputed datasets to derive the final model. As a result, our comparative analysis revealed that the Lasso method with interactions emerged as the most effective approach for predicting tracheostomy or death outcomes in infants with sBPD. The proposed model holds promise for informing clinical decision-making and improving the overall care and prognosis for this patient population."
+output: pdf_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning=FALSE)
+```
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+library(dplyr)
+library(tidyverse)
+library(ggmice)
+library(mice)
+library(gtsummary)
+library(glmnet)  
+library(bestglm)
+library(kableExtra)
+library(leaps)
+library(L0Learn)
+library(Matrix)
+library(nestfs)
+library(pROC)
+library(ggpubr)
+library(naniar)
+library(corrplot)
+
+```
+
+```{r, echo=FALSE}
+# load dataset
+sBPD <- read.csv("C:/ANGEL/Brown 22-24/23Fall/PHP2550_pda/datasets/project2.csv")
+
+```
+
+```{r, echo=FALSE}
+# correct a miscoded subject from dataset
+#sBPD[which(sBPD$center == 21),]
+sBPD[810,]$record_id <- 1000001
+sBPD[810,]$center <- 1
+
+# composite outcome variable
+sBPD <- sBPD %>% 
+  arrange(record_id) %>%
+  select(-mat_race) %>%
+  mutate(Trach_or_Death = if_else(Trach == 1 | Death == "Yes", 1, 0)) %>%
+  select(-c(Trach, Death)) %>%
+  unique()
+
+# factor variables 
+sBPD[,c(2:3, 8:14, 16, 20, 22, 26, 28)] <- lapply(sBPD[,c(2:3, 8:14, 16, 20, 22, 26, 28)], as.factor)
+
+# fill in some complete prenatal steroids for those not given prenatal corticosteroids
+sBPD$com_prenat_ster[sBPD$prenat_ster == "No"] <- "No"
+```
+
+
+# 1 Introduction
+
+[1]Bronchopulmonary Dysplasia (BPD) stands as one of the prevailing complications affecting premature infants, with classifications ranging from mild to moderate and severe. This condition arises in tandem with the prematurity of birth, a scenario where infants are delivered before reaching the expected gestational maturity, leading to structural damage in the lungs. Annually, severe Bronchopulmonary Dysplasia (sBPD) impacts over 10,000 neonates, necessitating the dependence of afflicted infants on ventilators to bolster lung function. Remarkably, 75% of these infants are discharged from medical facilities with ventilator support, facilitated by tracheostomy, ensuring ongoing assistance for daily living and the preservation of vital functions in the future.
+
+Despite tracheostomy being a commonplace surgical intervention offering support to patients with sBPD, it is not without its inherent risks, notably an increased susceptibility to death and infection. Consequently, within clinical settings, the imperative arises to discriminate among sBPD patients, determining those who genuinely require tracheostomy intervention. Recognizing this critical need, the focus of this report is the development of statistical models employing LASSO (Least Absolute Shrinkage and Selection Operator), Best Subset, and Forward Selection. Augmented by multiple imputation and cross-validation techniques, the models aim to address the challenge of predicting whether a patient with sBPD is likely to necessitate a tracheostomy. 
+
+Moreover, it is important to highlight the current absence of an established model for predicting the necessity of tracheostomy in sBPD cases. As a result, the decision to proceed with tracheostomy often relies heavily on the subjective judgment of clinicians, underscoring a critical gap in evidence-based decision-making. This report endeavors to fill this gap by developing and evaluating predictive models that offer more objective insights into the likelihood of tracheostomy in infants with severe bronchopulmonary dysplasia. The model selection process, encompassing variable selection, is geared towards identifying the most influential predictors in infants with sBPD for tracheostomy outcomes.
+
+
+# 2 Study Population
+
+[2]Study participants were selected from the BPD Collaborative Registry, a multi-center consortium comprising interdisciplinary BPD programs situated in the United States and Sweden. The participants consisted of infants diagnosed with severe Bronchopulmonary Dysplasia (sBPD) from nine distinct centers. Within the registry, a comprehensive dataset of standard demographic and clinical information was systematically collected at four pivotal time points: birth, 36 weeks postmenstrual age (PMA), 44 weeks PMA, and discharge. 
+
+```{r, echo=FALSE}
+# variable names for table summary
+var_label <- c(bw ~ "Birth weight (g)",
+               ga ~ "Obstetrical gestational age",
+               blength ~ "Birth length (cm)",
+               birth_hc ~ "Birth head circumference (cm)",
+               del_method ~ "Delivery method (1=vaginal, 2=cesarean)",
+               prenat_ster ~ "Prenatal Corticosteroids",
+               com_prenat_ster ~ "Complete Prenatal Steroids",
+               mat_chorio ~ "Maternal Chorioamnionitis",
+               sga ~ "Small for Gestational Age",
+               any_surf ~ "Surfactant in first 72 hrs",
+               weight_today.36 ~ "Weight at 36 Weeks",
+               ventilation_support_level.36 ~ "Ventilation Support Level at 36 Weeks",
+               inspired_oxygen.36 ~ "Fraction of Inspired Oxygen at 36 Weeks",
+               p_delta.36 ~ "Peak Inspiratory Pressure at 36 Weeks",
+               peep_cm_h2o_modified.36 ~ "Positive and Exploratory Pressure at 36 Weeks",
+               med_ph.36 ~ "Medication for Pulmonary Hypertension at 36 Weeks",
+               weight_today.44 ~ "Weight at 44 Weeks",
+               ventilation_support_level_modified.44 ~ "Ventilation Support Level at 44 Weeks",
+               inspired_oxygen.44 ~ "Fraction of Inspired Oxygen at 44 Weeks",
+               p_delta.44 ~ "Peak Inspiratory Pressure at 44 Weeks",
+               peep_cm_h2o_modified.44 ~ "Positive and Exploratory Pressure at 44 Weeks",
+               med_ph.44 ~ "Medication for Pulmonary Hypertension at 44 Weeks",
+               hosp_dc_ga ~ "Hospital Discharge Gestational Age")
+
+```
+
+To depict the study population comprehensively, two summary tables were generated, each incorporating variables collected by the registry across multiple time points for individual patients but stratified differently. The initial table is categorized by the composite outcome, namely the occurrence of tracheostomy or death before discharge. Notably, there is a larger cohort of patients with no tracheostomy or death (N=811) compared to those with the composite outcome (N=183). While minimal disparities are observed in the birth variables, discernible differences emerge in the proportions of patients with elevated ventilation support levels and medication usage at both 36 weeks and 44 weeks among those with the positive outcome. This emphasizes the potential association of ventilation support levels and medication with the likelihood of tracheostomy or death in severe Bronchopulmonary Dysplasia (sBPD) patients. Furthermore, patients with a positive outcome exhibit a higher hospital discharge gestational age, suggesting a potential correlation between gestational age at discharge and the composite outcome.
+
+```{r, echo=FALSE}
+# summary table by outcome
+sBPD %>%
+  tbl_summary(include = -c(record_id, mat_ethn), 
+              by = Trach_or_Death, 
+              missing = "no", 
+              label = var_label)  %>%
+  modify_header(list(stat_1 ~ "No Tracheostomy nor Death(N = 811)", 
+                     stat_2 ~ "Tracheostomy or Death (N = 183")) %>%
+  as_kable_extra(booktabs = TRUE,
+                 caption = "Summary Statistics by Outcome (Tracheostormy/Death vs. None)",
+                 longtable = TRUE) %>%
+  kableExtra::kable_styling(font_size = 8, latex_options = c("repeat_header", "HOLD_position", "scale_down"))
+
+```
+
+The earlier table displayed the proportion of patients with outcomes across nine different centers. Notably, Centers 1 and 12 had more patients with tracheostomy or death, while most centers had more severe Bronchopulmonary Dysplasia (sBPD) patients without tracheostomy before discharge. This suggests potential baseline differences among the centers, as highlighted in Table 2, which breaks down the data by center.
+
+In Table 2, it's clear that Centers 1 and 12 had patients with a higher level of ventilation support and more medication at both 36 and 44 weeks postmenstrual age (PMA). Other variables did not show significant differences. This suggests that these two centers might be different from the others in terms of the severity of patients they handle.
+
+```{r, echo=FALSE}
+# summary table by center
+sBPD %>%
+  tbl_summary(include = -c(record_id, mat_ethn), 
+              by = center, 
+              missing = "no",
+              label = var_label)%>%
+  add_p() %>%
+  as_kable_extra(booktabs = TRUE,
+    caption = "Summary Statistics by Center") %>%
+  kableExtra::kable_styling(font_size = 8,
+    latex_options = c("repeat_header", "HOLD_position", "scale_down")) %>%
+  landscape()
+
+```
+
+
+# 3 Method
+The code for the procedures outlined in this section is available on GitHub and is executed using the statistical software R (version 4.3.1).
+
+## Multiple Imputation and Test Split
+
+Multiple imputation creates multiple copies of the dataset with different imputed values and does identical analysis on all of the copies. There are three phases that are in multiple imputation tool: the imputation phase, which repetitively applies algorithms to generate fill-in entries for the missing; the analysis phase, which utilizes statistical analysis as if there weren’t missingness; lastly the pooling phase, which averages out the multiple sets of parameters for each copy. 
+
+When data are Missing Completely at Random (MCAR, the probability of missing data on a variable X is not related to other measured variables or X itself) or Missing at Random (MAR: the probability of missing data on X is related to other measured variables, but not to the underlying values of X itself), multiple imputation is an useful tool to handle missingness and therefore maintain original study population even with some missed observations. 
+
+And because the study population now has large enough subject, the subjects are split into "train" and "test" subsets in order to test model performance. This split is randomized by software, and the proportion is set manually to 70% train and 30% test. 
+
+```{r, echo=FALSE}
+# random vector to indicate test or train
+set.seed(1)
+ignore <- sample(c(TRUE, FALSE), size = nrow(sBPD), replace = TRUE, prob = c(0.3, 0.7))
+
+# multiple imputation
+sBPD_mice_out <- mice(sBPD[,-1], m = 5, seed = 1, ignore = ignore, print=F)
+
+```
+
+```{r, echo=FALSE}
+# empty vectors to be filled
+sBPD_imp <- vector("list",5)   
+sBPD_imp_test <- vector("list",5)   
+
+# split imputed dataset into train and test based on the random vector 
+sBPD_train <- filter(sBPD_mice_out, !ignore)
+sBPD_test <- filter(sBPD_mice_out, ignore)
+
+# store train sets and test set  
+for (i in 1:5){
+  sBPD_imp[[i]] <- mice::complete(sBPD_train,i) 
+#  sBPD_imp_test[[i]] <- mice::complete(sBPD_test, i) 
+}
+
+sBPD_imp_test <- mice::complete(sBPD_test, action = "long")
+
+```
+
+## Cross-Validated Model Selection
+Cross-validation is used in combination with LASSO and Best subset methods to develop four versions of the predictive model. Cross-validation is a statistical technique employed to assess the performance and generalizability of a predictive model. It involves partitioning the dataset into multiple subsets, commonly referred to as folds, with one subset reserved for testing the model and the others used for training. This process is iteratively repeated, each time using a different fold for testing. The results from each iteration are then averaged to provide a robust evaluation of the model's performance, minimizing the risk of overfitting or underfitting to a specific subset of data. 
+
+This report employs LASSO and Best Subset methods for model selection, coupled with cross-validation. These techniques, in conjunction with cross-validation, derive a set of coefficients, leading to the elimination of some variables from the predictor pool due to insignificance. Each method employs distinct algorithms in the variable selection process, and the resulting models' performances are subsequently compared. The model development process utilizes the "train" sets, while the model evaluation process relies on the "test" set.
+
+$$\text{LASSO method minimizes } \frac{1}{n} \Sigma_{i=1}^n\left(y_i-\beta x_i\right)^2+\lambda \Sigma_{j=1}^p\left|\beta_j\right| $$
+
+$$\text{Best Subset method minimizes } \frac{1}{n} \Sigma_{i=1}^n\left(y_i-\beta x_i\right)^2+\lambda \Sigma_{j=1}^p 1 \cdot\left(\beta_j \neq 0\right)$$
+
+## Model Evaluation
+The result models are evaluated using Sensitivity, Specificity, Brier Score, and AUC. 
+
+
+# 4 Results
+## Correlation and Missingness
+
+In this figure, the correlation between variables are plotted. Variables at birth are inter-correlated with each other which is reasonable because the variables are weight, length, and head circumference which are all related to an infant's size. Obstetrical gestational age is positively correlated to the size of an infant, that if the gestational age is low the size is small. Another observable correlation is between weight at 36 weeks and weight at 44 weeks. No collinearity is found. 
+
+Looking at the correlations, there could be possible interactions between the respiratory variables within same timepoint, and would be added to the predictor pool in the next step. 
+
+```{r, echo=FALSE, fig.cap="Correlation Plot for Variables"}
+# correlation plot for variables 
+cor_mat <- cor(sBPD[,-c(1:3, 8:14, 16, 20, 22, 26, 28)], use = "complete.obs")
+corrplot(cor_mat,tl.col = "black")
+
+```
+
+## EDA for missingness 
+
+The missingness summary table shows that this dataset has missingness for all variables at 44 weeks as well as the variable `any_surf`. It is observable that most missingness is at 44 weeks level, and is due to the early discharge age. If a patient discharged before 44 weeks PMA, their data is noted as NA. This missingness can be explained by observable factor, therefore the assumption holds for implementing multiple imputation. 
+
+```{r, echo=FALSE}
+# missingness summary table
+variable_names <- c("Fraction of Inspired Oxygen at 44 Weeks", "Peak Inspiratory Pressure at 44 Weeks", "Weight at 44 Weeks", "Positive and Exploratory Pressure at 44 Weeks", "Surfactant in first 72 hrs", "Ventilation Support Level at 44 Weeks", "Medication for Pulmonary Hypertension at 44 Weeks", "Complete Prenatal Steroids", "Peak Inspiratory Pressure at 36 Weeks", "Hospital Discharge Gestational Age", "Positive and Exploratory Pressure at 36 Weeks", "Weight at 36 Weeks", "Fraction of Inspired Oxygen at 36 Weeks", "Birth length (cm)", "Birth head circumference (cm)", "Maternal Chorioamnionitis", "Maternal Ethnicity", "Prenatal Corticosteroids", "Ventilation Support Level at 36 Weeks", "Medication for Pulmonary Hypertension at 36 Weeks", "Small for Gestational Age", "Center", "Gender", "Delivery method", "Outcome - Tracheostomy or Death")
+
+missingness_sBPD <- sBPD %>%
+  miss_var_summary() %>%
+  filter(n_miss > 0) %>% 
+  mutate(variable_names = variable_names) %>%
+  select(c(4,1:3))
+
+colnames(missingness_sBPD) <- c("Variable Name", "Variable", "Number of Missing", "Percentage % of Missing")
+
+missingness_sBPD %>%  
+  select(-2) %>%
+  kable(booktabs = TRUE, caption = "Missingness Summary") %>%
+  kableExtra::kable_styling(font_size = 8, latex_options = c("repeat_header", "HOLD_position"))
+
+```
+
+## Variable and Model Selection
+```{r, echo=FALSE}
+# Lasso model with cross validation
+lasso <- function(df) {
+  #' Runs 10-fold CV for lasso and returns corresponding coefficients 
+  #' @param df, data set
+  #' @return coef, coefficients for minimum cv error
+  
+  # Matrix form for ordered variables 
+  x.ord <- model.matrix(Trach_or_Death~ . 
+                        + ventilation_support_level.36*med_ph.36
+                        + ventilation_support_level_modified.44:p_delta.44
+                        + ventilation_support_level_modified.44:med_ph.44 
+                        + inspired_oxygen.44:med_ph.44, 
+                        data = df[,-c(1,4:6,26)])[,-1]
+  y.ord <- df$Trach_or_Death
+  
+  # Generate folds
+  k <- 10
+  set.seed(1) # consistent seeds 
+  folds <- sample(1:k, nrow(df), replace=TRUE)
+  
+  # Lasso model
+  lasso_mod_cv <- cv.glmnet(x.ord, y.ord, nfolds = 10, foldid = folds, alpha = 1, family = "binomial")
+  lasso_mod <- glmnet(x.ord, y.ord, nfolds = 10, alpha = 1,
+                      family = "binomial",
+                      lambda = lasso_mod_cv$lambda.min)
+  
+  # Get coefficients
+  coef <- coef(lasso_mod, lambda=lasso_mod$lambda.min)
+  return (coef)
+} 
+
+```
+
+```{r, echo=FALSE}
+# averaging the coefficients on 5 imputed train set
+lasso_coef1 <- lasso(sBPD_imp[[1]])
+lasso_coef2 <- lasso(sBPD_imp[[2]]) 
+lasso_coef3 <- lasso(sBPD_imp[[3]]) 
+lasso_coef4 <- lasso(sBPD_imp[[4]]) 
+lasso_coef5 <- lasso(sBPD_imp[[5]]) 
+lasso_coef <- cbind(lasso_coef1, lasso_coef2, lasso_coef3, 
+                    lasso_coef4, lasso_coef5) 
+avg_coefs_lasso <- apply(lasso_coef, 1, mean) 
+
+```
+
+```{r, echo=FALSE}
+# store the averaged set of coefficients and their occurrence of exclusion
+variables_occurrence_lasso <- 
+  as.matrix((lasso_coef1 == 0) + (lasso_coef2 == 0) + (lasso_coef3 == 0) +
+              (lasso_coef4 == 0) + (lasso_coef5 == 0)) %>% 
+  data.frame() %>%
+  mutate(occurrence_zeros_lasso = s0, coefs_lasso = round(avg_coefs_lasso, 5)) %>%
+  select(-s0) 
+
+```
+
+```{r, echo=FALSE}
+# Best Subset with cross validation
+bestsubset <- function(df) {
+  #' Runs 10-fold CV for best subset and returns corresponding coefficients 
+  #' @param df, data set
+  #' @return coef, coefficients for minimum cv error
+  
+  # Matrix form for ordered variables 
+  x.ord <- model.matrix(Trach_or_Death~ . 
+                        + ventilation_support_level.36*med_ph.36
+                        + ventilation_support_level_modified.44:p_delta.44
+                        + ventilation_support_level_modified.44:med_ph.44 
+                        + inspired_oxygen.44:med_ph.44,
+                        data = df[,-c(1,4:6,26)])[,-1]
+  y.ord <- df$Trach_or_Death
+  
+  # number of folds
+  k <- 10
+  
+  # Best Subset model
+  bs_mod_cv <- L0Learn.cvfit(x.ord, y.ord, nFolds = k, seed = 1, 
+                             penalty = "L0", loss = "Logistic", intercept = TRUE)
+  bs_mod <- bs_mod_cv$fit
+  
+  # Get coefficients
+  lambda.min <- which.min(bs_mod_cv$cvMeans[[1]]) # the index of lambda that yields minimum cv errors
+  coef <- c(bs_mod_cv$fit$a0[[1]][lambda.min], bs_mod_cv$fit$beta[[1]][,lambda.min])
+  return (coef)
+} 
+
+```
+
+```{r, echo=FALSE}
+# averaging the coefficients on 5 imputed train set
+bestsubset_coef1 <- bestsubset(sBPD_imp[[1]]) 
+bestsubset_coef2 <- bestsubset(sBPD_imp[[2]]) 
+bestsubset_coef3 <- bestsubset(sBPD_imp[[3]]) 
+bestsubset_coef4 <- bestsubset(sBPD_imp[[4]]) 
+bestsubset_coef5 <- bestsubset(sBPD_imp[[5]]) 
+bestsubset_coef <- cbind(bestsubset_coef1, bestsubset_coef2, bestsubset_coef3, 
+                    bestsubset_coef4, bestsubset_coef5) 
+avg_coefs_bestsubset <- apply(bestsubset_coef, 1, mean) 
+
+```
+
+```{r, echo=FALSE}
+# run this section to get all coefficient names as bestsubset does not return any names 
+# same code as in Lasso model, just with all interactions
+x.ord <- model.matrix(Trach_or_Death~ (.)^2, 
+                        data = sBPD_imp[[1]][,-c(1,4:6,26)])[,-1]
+y.ord <- sBPD_imp[[1]]$Trach_or_Death
+  
+# Generate folds
+k <- 10
+set.seed(1) # consistent seeds 
+folds <- sample(1:k, nrow(sBPD_imp[[1]]), replace=TRUE)
+  
+# Lasso model
+lasso_mod_cv <- cv.glmnet(x.ord, y.ord, nfolds = 10, foldid = folds, alpha = 1, family = "binomial")
+lasso_mod <- glmnet(x.ord, y.ord, nfolds = 10, alpha = 1,
+                      family = "binomial",
+                      lambda = lasso_mod_cv$lambda.min)
+  
+# Get coefficients
+coef <- coef(lasso_mod, lambda=lasso_mod$lambda.min)
+```
+
+
+```{r, echo=FALSE}
+# store the averaged set of coefficients and their occurrence of exclusion
+variables_occurrence_bs <- 
+  data.frame(occurrence_zeros_bs = 
+               as.matrix((bestsubset_coef1 == 0) + (bestsubset_coef2 == 0) + (bestsubset_coef3 == 0) +
+                           (bestsubset_coef4 == 0) + (bestsubset_coef5 == 0)),
+             coefs_bs = round(avg_coefs_bestsubset,5)) 
+
+row.names(variables_occurrence_bs) <- names(avg_coefs_lasso)
+
+
+```
+
+
+The two methods compute different sets of averaged coefficients, and are summarized in the below table. Exclusion occurrence means the count of how many times this variable being excluded in the model output (i.e. if exclusion occurrence = 5, this variable never appeared when the model selection is performed on the 5 imputed train set respectively). Variables highlighted have low count of exclusion in both methods, meaning that they are chosen as predictors for both models.  
+
+```{r, echo=FALSE}
+variables_summary <- cbind(variables_occurrence_lasso, variables_occurrence_bs)
+
+variables_summary[2:10,] %>%
+  filter(!occurrence_zeros_lasso == 5 | !occurrence_zeros_bs == 5) %>%
+  kable(booktabs = TRUE,
+      caption = "Predictors at Birth level") %>%
+  row_spec(c(2,4,8), background = "pink") %>%
+  kableExtra::kable_styling(font_size = 8, latex_options = c("repeat_header", "HOLD_position", "scale_down"))
+
+variables_summary[11:17,] %>% 
+  filter(!occurrence_zeros_lasso == 5 | !occurrence_zeros_bs == 5) %>%
+  kable(booktabs = TRUE,
+      caption = "Predictors at 36 wk PMA level") %>%
+  row_spec(c(3,4), background = "yellow") %>%
+  kableExtra::kable_styling(font_size = 8, latex_options = c("repeat_header", "HOLD_position", "scale_down"))
+
+variables_summary[18:24,] %>% 
+  filter(!occurrence_zeros_lasso == 5 | !occurrence_zeros_bs == 5) %>%
+  kable(booktabs = TRUE,
+      caption = "Predictors at 44 wk PMA level") %>%
+  row_spec(c(1,3,4,6), background = "#00c19a") %>%
+  kableExtra::kable_styling(font_size = 8, latex_options = c("repeat_header", "HOLD_position", "scale_down"))
+
+variables_summary[25:31,] %>% 
+  filter(!occurrence_zeros_lasso == 5 | !occurrence_zeros_bs == 5) %>%
+  kable(booktabs = TRUE,
+      caption = "Interaction-Term Predictors") %>%
+  row_spec(c(1,3,4), background = "#E68613") %>%
+  kableExtra::kable_styling(font_size = 8, latex_options = c("repeat_header", "HOLD_position", "scale_down"))
+```
+
+
+The coefficients are then multiplied with the corresponding variable from test dataset, and the probability of outcome is calculated as 
+
+$$p(x)=\frac{1}{1+e^{-\left(\beta_0+...+\beta_p x_p\right)}}$$
+
+```{r, echo=FALSE}
+# model matrix for test dataset
+X.test <- model.matrix(Trach_or_Death~. , data = sBPD_imp_test[c(4:5, 9:27, 29)]) 
+
+X.test2 <- model.matrix(Trach_or_Death~. 
+                        + ventilation_support_level.36*med_ph.36
+                        + ventilation_support_level_modified.44:p_delta.44
+                        + ventilation_support_level_modified.44:med_ph.44 
+                        + inspired_oxygen.44:med_ph.44, data = sBPD_imp_test[c(4:5, 9:27, 29)]) 
+
+
+# predicted probability with three models
+pred_lasso <- plogis(X.test %*% avg_coefs_lasso[-c(25:31)])
+pred_lasso_interactions <- plogis(X.test2 %*% avg_coefs_lasso)
+pred_bestsubset <- plogis(X.test %*% avg_coefs_bestsubset[-c(25:31)])
+pred_bestsubset_interactions <- plogis(X.test2 %*% avg_coefs_bestsubset)
+
+```
+
+## Discrimination and Calibration
+
+```{r, echo=FALSE}
+# roc for all three models
+roc_lasso <- roc(sBPD_imp_test$Trach_or_Death, pred_lasso)
+roc_lasso_interactions <- roc(sBPD_imp_test$Trach_or_Death, pred_lasso_interactions)
+roc_bs <- roc(sBPD_imp_test$Trach_or_Death, pred_bestsubset)
+roc_bs_interactions <- roc(sBPD_imp_test$Trach_or_Death, pred_bestsubset_interactions)
+
+
+# evaluation metrics helper function
+eval_metrics <- function(pred_prob, actual, threshold = 0.1){
+  # predicted probabilities and actual values
+  prediction <- ifelse(pred_prob > threshold, 1, 0)
+  sensitivity <- sum(prediction == 1 & actual == 1) / sum(actual == 1)
+  specificity <- sum(prediction == 0 & actual == 0) / sum(actual == 0)
+  BS <- mean( (pred_prob - ifelse(actual == 1, 1, 0))^2 )
+  AUC <- as.numeric(roc(sBPD_imp_test$Trach_or_Death, pred_prob)$auc)
+  return(c(sensitivity, specificity, BS, AUC))
+}
+
+# evaluation metrics 
+metrics_lasso <- eval_metrics(pred_lasso, sBPD_imp_test$Trach_or_Death)
+metrics_lasso_interactions <- eval_metrics(pred_lasso_interactions, sBPD_imp_test$Trach_or_Death)
+metrics_bestsubset <- eval_metrics(pred_bestsubset, sBPD_imp_test$Trach_or_Death)
+metrics_bestsubset_interactions <- eval_metrics(pred_bestsubset_interactions, sBPD_imp_test$Trach_or_Death)
+
+metrics_lasso
+metrics_lasso_interactions
+metrics_bestsubset
+metrics_bestsubset_interactions
+```
+
+```{r, echo=FALSE}
+# put the evaluation metrics into a table
+metrics_table <- data.frame(metrics_lasso, metrics_lasso_interactions, metrics_bestsubset, metrics_bestsubset_interactions)
+
+rownames(metrics_table) <- c("Sensitivity", "Specificity", "Brier Score", "AUC")
+colnames(metrics_table) <- c("Lasso", "Lasso with Interactions", "Best Subset", "Best Subset with Interactions")
+
+metrics_table %>% kable(caption = "Model Evaluation Metrics", align = "c",booktabs = T) %>%
+kable_styling(full_width=T,latex_options = c('HOLD_position'),font_size = 10)
+
+```
+
+```{r, echo=FALSE, fig.cap="ROC Curves for Three Models", fig.height=4}
+# ROC Curves
+plot(roc_lasso, main = "Multiple ROC Curves", col = "brown3", lwd = 2)
+plot(roc_lasso_interactions, col = "brown1", add = TRUE, lwd=2)
+plot(roc_bs, col = "navy", add = TRUE, lwd = 2)
+plot(roc_bs_interactions, col = "cornflowerblue", add = TRUE, lwd=2)
+
+legend("bottomright", legend = c("Lasso", "Lasso with Interactions", "Best Subset", "BS with Interactions"), col = c("brown3", "brown1", "navy", "cornflowerblue"), lwd = 2)
+
+```
+
+```{r, echo=FALSE}
+# calibration plot helper function
+calibration_plot <- function(pred_prob) {
+  num_cuts <- 10
+  calib_data <- data.frame(prob = pred_prob,
+                           bin = cut(pred_prob, breaks = num_cuts),
+                           class = ifelse(sBPD_imp_test$Trach_or_Death == 1, 1, 0))
+  
+  calib_data <- calib_data %>%
+    group_by(bin) %>%
+    summarize(observed = sum(class)/n(),
+              expected = sum(prob)/n(),
+              se = sqrt(observed*(1-observed)/n()))
+  
+  calib_plot <- 
+    ggplot(calib_data) +
+    geom_abline(intercept = 0, slope = 1, color="red") +
+    geom_errorbar(aes(x = expected, ymin=observed-1.96*se,
+                      ymax=observed+1.96*se),
+                  colour="black", width=.01)+
+    geom_point(aes(x = expected, y = observed)) +
+    labs(x="Expected Proportion", y="Observed Proportion") +
+    theme_minimal()
+  
+  return(calib_plot)
+}
+
+```
+
+```{r, echo=FALSE, fig.cap="Calibration Plots for Lasso and Best Subset Models", fig.height=4}
+# calibration plots 
+ggarrange(calibration_plot(pred_lasso_interactions), calibration_plot(pred_bestsubset_interactions))
+
+```
+
+# 5 Discussion
+The four models in our analysis compute distinct sets of coefficients, with each set derived through five iterations of model selection on the training data, subsequently averaging the outcomes. Both the Lasso and Best Subset methods exhibit similar performance characteristics while Best Subset being slightly more aggresive in variable selection than Lasso, specifically within this dataset. By fitting the model with and without interaction terms, by evaluation metrics it is seen that both methods perform better (lower Brier score, higher AUC) with inclusion of interaction terms. Then, Lasso model with interactions is a more accurate fit than Best Subset model with interactions, as seen in the two calibration plots. 
+
+Notably, while the center variable is retained in both the Lasso and Best Subset approaches, its presence may limit the generalizability of the final model. To assess the impact of excluding the center variable on overall model performance, a test is conducted. The results reveal that when dropping the center variable while retaining the other chosen variables from the cross-validated Lasso, the model performs slightly worse than the original. This underscores the nuanced influence of `center` variables on the overall predictive capacity of the model.
+```{r, echo=FALSE, eval=FALSE}
+# try excluding `center` variable 
+pred_lasso.nocenter <- plogis(X.test[,-(2:9)] %*% avg_coefs_lasso[-(2:9)])
+
+dropcenter <- data.frame(eval_metrics(pred_lasso.nocenter, sBPD_imp_test$Trach_or_Death), metrics_table$Lasso)
+colnames(dropcenter) <- c("Lasso without Center Variable" , "Lasso with Center Variable")
+rownames(dropcenter) <- rownames(metrics_table)
+
+dropcenter %>% kable(caption = "Model Evaluation Metrics for Lasso with and without Center", align = "c",booktabs = T) %>%
+kable_styling(full_width=T,latex_options = c('HOLD_position'),font_size = 10)
+
+```
+
+## Strength and Limitation
+Despite achieving a low Brier score and a high AUC value, indicating strong predictive performance, the final model derived from cross-validated Lasso exhibits a potential limitation in its generalizability to data from centers not present in the original dataset. This suggests a need for caution when applying the model beyond the observed centers. Nevertheless, the model, which retains the majority of variables, demonstrates relatively high accuracy within the known centers.
+
+Another limitation of the model stems from missing data, particularly at 44 weeks and across various centers. Multiple imputation assumes Missing at Random (MAR) conditions, yet the missingness, especially at 44 weeks, introduces uncertainty into whether the imputed dataset accurately reflects the broader population.
+
+# 6 Conclusion
+In summary, among the Lasso and Best Subset Selection methods, the Lasso method emerges as the most effective in constructing a predictive model for Tracheostomy or Death in Neonates with Severe Bronchopulmonary Dysplasia (sBPD). Futhermore, by inputting pre-selected interaction terms into Lasso allows selection on significant interactions. Result showed that the model with interactions is in fact a better fit than without interactions. 
+Some variables are selected by both Lasso and Best Subset model, which is a sign that those variables are particularly important. Coefficients demonstrate cesarean delivery and invasive ventilation support at both 36 and 44 weeks PMA are important risk predictors for tracheostomy. Therefore, by utilizing this model in clinical setting, clinicians can predict the suitability of tracheostomy based on patient information at birth, 36 weeks, and 44 weeks.
+
+\newpage
+# 6 Reference
+
+[1] U.S. Department of Health and Human Services. (n.d.). Bronchopulmonary dysplasia (BPD). National Heart Lung and Blood Institute. https://www.nhlbi.nih.gov/health/bronchopulmonary-dysplasia 
+
+[2] Data information given by Dr. Robin Mckinney
+
+\newpage
+# 7 Appendix: All code for this report
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```

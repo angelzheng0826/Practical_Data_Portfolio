@@ -19,34 +19,48 @@ The code files contain sections: (sub-bullet explaining the content)
 
 * Demographic Information, univariate
   * Contains tables and histograms that show the demographic information about the data
+  
 * Missing Pattern
-  * Table of the variables with the most missingness percentage 
-  * Missing patterns plots for pre- and post-natal responses 
-* Prenatal and Postnatal Smoking, univariate
+  * Table of the variables with missingness summary 
+  
+* Prenatal and Postnatal Smoking
   * Tables summarizing the responses from prenatal and postnatal period, respectively
-* Externalizing Behaviors vs. Prenatal Period Tobacco Exposure
+  * plot and correlation between SDP and ETS
+  
+* Externalizing Behaviors vs. SDP/ETS
   * how the Independent Variable is constructed and why
   * how the outcome variables "Externalizing" are defined
   * why excluding autism data
-  * boxplots for externalizing behaviors by mother's smoking status across timepoints
-  * scatterplots and line estimate for externalizing behaviors against mother's cotinine level
-* Externalizing Behaviors vs. Postnatal Period Tobacco Exposure
-  * boxplots for externalizing behaviors by child's smoke exposure status across timepoints
-  * scatterplots and line estimate for externalizing behaviors against child's cotinine level
+  * plots to visualize relationship
+  
   * correlation of some possible covariates variables to aid explanation
-* Self Emotion Regulation vs. Prenatal Period Tobacco Exposure
+  
+* Self Emotion Regulation vs. SDP/ETS
   * how the outcome variables "Self-Regulation" are defined
-  * boxplots for self-regulation by mother's smoking status across timepoints
-  * scatterplots and line estimate for self-regulation against mother's cotinine level
-* Self Emotion Regulation vs. Postnatal Period Tobacco Exposure
-  * boxplots for self-regulation by child's smoke exposure status across timepoints
-  * scatterplots and line estimate for self-regulation against child's cotinine level
+  * plots to visualize relationship
   * correlation of some possible covariates variables to aid explanation
+  
 * Substance-use vs. Prenatal and Postnatal Period Tobacco Exposure
   * how substance-use is defined and used for plotting
   * barplots for different types of substance-use behaviors, by mother's smoking status across timepoints
+  
 * Initial Regression
   * test of whether the effect of variable is statistically significant 
+  
 * Conclusion
   * summary of the findings
   * strengths and limitations of the data
+
+
+
+**Libraries Used**
+
+`tidyverse `- for data manipulation
+
+`naniar` - for missing summary
+
+`kableExtra` - for neat kables
+
+`gtsummary` - for summary tables
+
+`ggpubr` - for merging ggplot items

@@ -18,7 +18,6 @@ The code files contains sections in order of a scientific research paper.
   * cross-validated model selections (each with a written function to help reproducibility)
     * LASSO using package `glmnet`
     * Best Subset using package `L0Learn`
-    * Forward selection using package `nestfs`
   * model evaluation metrics and plots
     * discrimination and calibration
 * 4 Results 
@@ -27,6 +26,22 @@ The code files contains sections in order of a scientific research paper.
   * model coefficients and occurrence count of exclusion
   * model evaluation
 * 5 Discussion
-  * test excluding `center` and re-evaluated 
+  * test including or excluding `center` and evaluated 
 * 6 Conclusion
 * 7 Code appendix 
+
+
+
+**Additional Libraries Used**
+
+`dplyr`, `tidyverse` - for data manipulation
+
+`ggmice` - for missing data visualization
+
+`gtsummary` - for summary table
+
+`KableExtra` - for neat kable output
+
+`pROC` - for model evaluations
+
+`corrplot` for correlation plot
